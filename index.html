@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grito Batalla - Meet Multiplayer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    
+    <style>
+        body { margin: 0; overflow: hidden; color: white; font-family: sans-serif; user-select: none; background-color: #0f172a;}
+        .hidden { display: none !important; }
+        
+        #admin-lobby, #player-setup, #player-waiting { background-image: url('./fondo_lobby.jpg'); background-size: cover; background-position: center; }
+        #battle-screen { background-image: url('./fondo_batalla.jpg'); background-size: cover; background-position: center; }
+
+        .monster-container {
+            width: 120px; height: 120px; position: relative; cursor: pointer; border-radius: 1rem; transition: transform 0.2s;
+            background-color: rgba(51, 65, 85, 0.8); background-size: cover; background-position: center; border: 2px solid transparent;
+        }
+        .monster-container.selected { border: 4px solid #3b82f6; transform: scale(1.1); box-shadow: 0 0 15px #3b82f6;}
+        
+        .battle-monster { width: 350px; height: 350px; }
+        .hp-bar-bg { background-color: #ef4444; width: 100%; height: 30px; border-radius: 15px; border: 3px solid #000; position: relative;}
+        .hp-bar-fill { background-color: #22c55e; height: 100%; transition: width 0.1s linear; border-radius: 12px;}
+        .hp-text { position: absolute; width: 100%; text-align: center; top: 2px; font-weight: bold; text-shadow: 1px 1px 2px black; }
+
+        @keyframes shake { 0% { transform: translate(1px, 1px) rotate(0deg); } 25% { transform: translate(-3px, 0px) rotate(2deg); } 50% { transform: translate(1px, -1px) rotate(-1deg); } 75% { transform: translate(-3px, 1px) rotate(1deg); } 100% { transform: translate(1px, -2px) rotate(-1deg); } }
+        .shaking { animation: shake 0.1s infinite; }
+        .onomatopoeia { position: absolute; font-size: 3rem; font-weight: 900; color: #fbbf24; -webkit-text-stroke: 2px #b91c1c; text-shadow: 3px 3px 0 #000; animation: popOut 0.8s forwards; pointer-events: none; z-index: 50; }
+        @keyframes popOut { 0% { transform: scale(0.1); opacity: 1; } 50% { transform: scale(1.2) translate(var(--tx), var(--ty)); opacity: 1; } 100% { transform: scale(1) translate(calc(var(--tx) * 1.5), calc(var(--ty) * 1.5)); opacity: 0; } }
+
+        /* Overlay Cuenta Regresiva */
+        #countdown-overlay { background: rgba(0,0,0,0.7); z-index: 100; display: flex; justify-content: center; align-items: center; }
+        .countdown-text { font-size: 10rem; font-weight: 900; color: yellow; text-shadow: 0 0 20px red; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+    <!-- PANTALLA 1: ELEGIR ROL -->
+    <div id="role-selection" class="min-h-screen flex flex-col items-center justify-center p-8 bg-slate-900">
+        <h1 class="text-6xl font-black mb-10 text-white drop-shadow-lg text-center" style="-webkit-text-stroke: 2px #3b82f6;">BOW-WOW BATTLE</h1>
+        <div class="flex gap-8">
+            <button onclick="showAdminLobby()" class="bg-red-600 hover:bg-red-500 text-white font-bold py-6 px-10 rounded-2xl text-2xl shadow-lg border-2 border-red-400">👑 Entrar como ADMIN (Host Meet)</button>
+            <button onclick="showPlayerSetup()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-6 px-10 rounded-2xl text-2xl shadow-lg border-2 border-blue-400">🎮 Entrar como JUGADOR</button>
+        </div>
+    </div>
+
+    <!-- PANTALLA 2 (JUGADOR): CONFIGURACIÓN -->
+    <div id="player-setup" class="hidden min-h-screen flex-col items-center justify-center p-8 relative">
+        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
+        <div class="z-10 flex flex-col items-center bg-slate-900 bg-opacity-90 p-8 rounded-2xl border border-gray-700">
+            <h2 class="text-4xl font-bold mb-4 text-blue-300">Regístrate para la Batalla</h2>
+            <input type="text" id="player-name" placeholder="Escribe tu Nombre" class="px-4 py-3 mb-6 rounded text-black font-bold text-center text-xl w-full">
+            <div id="monster-grid" class="grid grid-cols-4 gap-4 mb-6"></div>
+            <button id="btn-join" class="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-8 rounded-full text-xl shadow-lg">Entrar a la Sala de Espera</button>
+        </div>
+    </div>
+
+    <!-- PANTALLA 3 (JUGADOR): ESPERANDO / JUGANDO -->
+    <div id="player-waiting" class="hidden min-h-screen flex-col items-center justify-center p-8 relative text-center">
+        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
+        <div class="z-10 bg-slate-900 bg-opacity-90 p-10 rounded-2xl border border-gray-700">
+            <h2 id="player-status-title" class="text-5xl font-bold mb-4 text-yellow-400">En el Lobby...</h2>
+            <p id="player-status-desc" class="text-2xl text-gray-300 mb-6">Espera a que el Administrador inicie tu batalla.</p>
+            <div id="player-mic-status" class="text-xl font-bold"></div>
+            <!-- Botón de emergencia por si no funciona el micro -->
+            <button id="btn-scream-click" class="hidden mt-8 bg-red-600 active:bg-red-800 text-white font-black py-10 px-20 rounded-3xl text-4xl shadow-2xl border-4 border-red-400 w-full">¡CLIC PARA GRITAR!</button>
+        </div>
+    </div>
+
+    <!-- PANTALLA 4 (ADMIN): LOBBY -->
+    <div id="admin-lobby" class="hidden min-h-screen flex-col p-8 relative">
+        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
+        <div class="z-10 flex flex-col w-full max-w-5xl mx-auto bg-slate-900 bg-opacity-90 p-8 rounded-2xl border border-gray-700 mt-10">
+            <h2 class="text-5xl font-bold mb-8 text-white text-center">Panel de Control - Lobby</h2>
+            
+            <div class="flex justify-between items-start gap-8 mb-8">
+                <!-- Lista Jugadores Conectados -->
+                <div class="w-1/3 bg-slate-800 p-4 rounded-xl border border-gray-600 h-96 overflow-y-auto">
+                    <h3 class="text-2xl font-bold mb-4 text-blue-300">Jugadores Conectados</h3>
+                    <ul id="players-list" class="space-y-2"></ul>
+                </div>
+                
+                <!-- Matchmaking -->
+                <div class="w-2/3 flex flex-col items-center justify-center bg-slate-800 p-8 rounded-xl border border-gray-600 h-96">
+                    <h3 class="text-3xl font-bold mb-8 text-yellow-400">Armar Batalla</h3>
+                    <div class="flex gap-8 w-full justify-center mb-8">
+                        <select id="select-p1" class="text-black text-xl p-3 rounded font-bold w-48"><option value="">-- Jugador 1 --</option></select>
+                        <div class="text-4xl font-black text-red-500 pt-2">VS</div>
+                        <select id="select-p2" class="text-black text-xl p-3 rounded font-bold w-48"><option value="">-- Jugador 2 --</option></select>
+                    </div>
+                    <button id="btn-start-battle" class="bg-red-600 hover:bg-red-500 text-white font-bold py-4 px-10 rounded-full text-2xl shadow-xl w-full cursor-not-allowed opacity-50" disabled>
+                        ⚔️ INICIAR BATALLA (Mejor de 3) ⚔️
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PANTALLA 5 (ADMIN): BATALLA COMPARTIDA EN MEET -->
+    <div id="battle-screen" class="hidden w-screen h-screen relative flex-col justify-between">
+        <div class="absolute inset-0 bg-black bg-opacity-30 z-0"></div>
+        <div id="countdown-overlay" class="absolute inset-0 hidden"><div id="countdown-number" class="countdown-text">3</div></div>
+
+        <!-- UI Superior -->
+        <div class="z-10 flex justify-between p-8 w-full max-w-6xl mx-auto bg-black bg-opacity-60 rounded-b-3xl shadow-xl">
+            <div class="w-2/5">
+                <div class="text-3xl font-black text-white mb-2" id="name-p1">Jugador 1</div>
+                <div class="hp-bar-bg"><div id="hp-p1" class="hp-bar-fill"></div><div id="hp-text-p1" class="hp-text">300 / 300</div></div>
+            </div>
+            <div class="text-center flex flex-col justify-center">
+                <div class="text-5xl font-black text-yellow-400">Ronda <span id="round-num">1</span></div>
+                <div class="text-2xl font-bold text-white mt-2 bg-gray-900 px-4 py-1 rounded-full border border-gray-600">Marcador: <span id="score-board" class="text-blue-400">0</span> - <span class="text-red-400">0</span></div>
+            </div>
+            <div class="w-2/5 text-right">
+                <div class="text-3xl font-black text-white mb-2" id="name-p2">Jugador 2</div>
+                <div class="hp-bar-bg flex justify-end"><div id="hp-p2" class="hp-bar-fill"></div><div id="hp-text-p2" class="hp-text">300 / 300</div></div>
+            </div>
+        </div>
+
+        <!-- Escenario Inferior -->
+        <div class="z-10 flex-grow flex justify-between items-end pb-10 px-20 max-w-7xl mx-auto w-full">
+            <div id="battle-sprite-p1" class="monster-container battle-monster drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]"></div>
+            
+            <div class="flex flex-col items-center justify-end pb-4">
+                <canvas id="volume-canvas" width="100" height="350" class="bg-black bg-opacity-70 border-4 border-gray-800 rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.8)]"></canvas>
+            </div>
+
+            <div id="battle-sprite-p2" class="monster-container battle-monster drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]" style="transform: scaleX(-1);"></div>
+        </div>
+        
+        <!-- PANTALLA RESULTADO RONDA -->
+        <div id="result-screen" class="hidden absolute inset-0 z-50 flex flex-col items-center justify-center bg-black bg-opacity-90">
+            <h2 id="winner-text" class="text-8xl font-black mb-8 drop-shadow-[0_0_20px_currentColor]"></h2>
+            <button id="btn-next" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-10 rounded-full text-3xl hidden shadow-2xl">Siguiente Ronda</button>
+            <button id="btn-home" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-4 px-10 rounded-full text-2xl hidden mt-6" onclick="location.reload()">Volver al Lobby</button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. CONFIGURACIÓN DE FIREBASE (¡PEGA TU CÓDIGO AQUÍ!)
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBhkQ0aVcymEDfoA-CfU2nPnNLIZMuNpqc",
+            authDomain: "fabrica-de-gritos.firebaseapp.com",
+            databaseURL: "https://fabrica-de-gritos-default-rtdb.firebaseio.com",
+            projectId: "fabrica-de-gritos",
+            storageBucket: "fabrica-de-gritos.firebasestorage.app",
+            messagingSenderId: "371240247216",
+            appId: "1:371240247216:web:8b7e3be595cf58f2ec0075",
+            measurementId: "G-RST4CJZPQT"
+        };
+        
+        // Inicializar Firebase
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // Variables Globales
+        let myPlayerId = 'user_' + Math.random().toString(36).substr(2, 9);
+        let selectedIndex = 0;
+        
+        // Variables de Audio (Solo para jugadores)
+        let audioContext, analyser, dataArray;
+        let localStream = null;
+        let clickVolume = 0;
+        let isMyTurnToBattle = false;
+        let playerRoleInBattle = null; // 'p1' o 'p2'
+        let audioSenderInterval;
+
+        // Variables de Admin
+        let p1_hp = 300, p2_hp = 300, p1_wins = 0, p2_wins = 0, currentRound = 1;
+        let p1_vol_admin = 0, p2_vol_admin = 0;
+        let adminGameLoopReq;
+        const words = ["¡WOOF!", "¡GRRR!", "¡AHHH!", "¡RAAAW!", "¡BOOM!", "¡ZAS!"];
+
+        // ==========================================
+        // UI NAVEGACIÓN BASICA
+        // ==========================================
+        function hideAll() {
+            document.querySelectorAll('body > div').forEach(el => el.classList.add('hidden'));
+        }
+
+        // ==========================================
+        // LÓGICA DEL JUGADOR
+        // ==========================================
+        function showPlayerSetup() {
+            hideAll();
+            document.getElementById('player-setup').classList.remove('hidden');
+            document.getElementById('player-setup').classList.add('flex');
+            
+            // Dibujar grilla de monstruos
+            const grid = document.getElementById('monster-grid');
+            grid.innerHTML = '';
+            for (let i = 0; i < 8; i++) {
+                const el = document.createElement('div');
+                el.className = `monster-container ${i === 0 ? 'selected' : ''}`;
+                el.style.backgroundImage = `url('./monstruo_${i}.png')`;
+                el.onclick = () => {
+                    document.querySelectorAll('.monster-container').forEach(m => m.classList.remove('selected'));
+                    el.classList.add('selected');
+                    selectedIndex = i;
+                };
+                grid.appendChild(el);
+            }
+        }
+
+        document.getElementById('btn-join').onclick = async () => {
+            const name = document.getElementById('player-name').value || "Invitado";
+            
+            hideAll();
+            document.getElementById('player-waiting').classList.remove('hidden');
+            document.getElementById('player-waiting').classList.add('flex');
+
+            const statusTitle = document.getElementById('player-status-title');
+            const micStatus = document.getElementById('player-mic-status');
+            const clickBtn = document.getElementById('btn-scream-click');
+
+            // 1. Pedir permisos de solo Audio (ya que no queremos video)
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                micStatus.innerHTML = "<span class='text-green-400'>✅ Micrófono conectado.</span> ¡Prepárate para gritar!";
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                audioContext.createMediaStreamSource(localStream).connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+            } catch (err) {
+                micStatus.innerHTML = "<span class='text-red-400'>⚠️ Sin micrófono.</span> Usarás el botón para atacar.";
+                clickBtn.classList.remove('hidden'); // Mostrar botón de pánico
+                
+                clickBtn.onclick = () => { if(isMyTurnToBattle) clickVolume = 120; };
+            }
+
+            // 2. Escribirse en Firebase (Lobby)
+            db.ref('lobby/' + myPlayerId).set({
+                id: myPlayerId,
+                name: name,
+                monster: selectedIndex,
+                timestamp: firebase.database.ServerValue.TIMESTAMP
+            });
+
+            // Borrarse al cerrar pestaña
+            db.ref('lobby/' + myPlayerId).onDisconnect().remove();
+
+            // 3. Escuchar el estado del juego para saber si me seleccionaron
+            db.ref('battle_state').on('value', snap => {
+                const state = snap.val();
+                if (!state) return;
+
+                if (state.status === 'battle' && (state.p1.id === myPlayerId || state.p2.id === myPlayerId)) {
+                    // ¡ME ELIGIERON Y LA BATALLA EMPEZÓ!
+                    isMyTurnToBattle = true;
+                    playerRoleInBattle = state.p1.id === myPlayerId ? 'p1_vol' : 'p2_vol';
+                    
+                    statusTitle.innerText = "¡ES TU TURNO!";
+                    statusTitle.className = "text-6xl font-black mb-4 text-red-500 animate-pulse";
+                    document.getElementById('player-status-desc').innerText = "¡GRITA PARA ATACAR AHORA MISMO!";
+                    document.getElementById('player-waiting').classList.add('border-8', 'border-red-600');
+                    
+                    if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+                    
+                    // Empezar a enviar volumen a Firebase 10 veces por segundo
+                    clearInterval(audioSenderInterval);
+                    audioSenderInterval = setInterval(sendVolumeToFirebase, 100);
+                } else {
+                    // Esperando...
+                    isMyTurnToBattle = false;
+                    clearInterval(audioSenderInterval);
+                    
+                    statusTitle.innerText = "En el Lobby...";
+                    statusTitle.className = "text-5xl font-bold mb-4 text-yellow-400";
+                    document.getElementById('player-status-desc').innerText = "Espera tu turno para batallar.";
+                    document.getElementById('player-waiting').classList.remove('border-8', 'border-red-600');
+                }
+            });
+        };
+
+        function sendVolumeToFirebase() {
+            let vol = 0;
+            if (analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                vol = (dataArray.reduce((a, b) => a + b) / dataArray.length) * 1.8;
+            } else {
+                vol = clickVolume;
+                clickVolume = Math.max(0, clickVolume - 10);
+            }
+            // Enviar a firebase
+            db.ref('battle_state/' + playerRoleInBattle).set(vol);
+        }
+
+        // ==========================================
+        // LÓGICA DEL ADMIN (HOST)
+        // ==========================================
+        let allPlayers = {};
+        
+        function showAdminLobby() {
+            hideAll();
+            document.getElementById('admin-lobby').classList.remove('hidden');
+            document.getElementById('admin-lobby').classList.add('flex');
+
+            // Leer jugadores del lobby en tiempo real
+            db.ref('lobby').on('value', snap => {
+                allPlayers = snap.val() || {};
+                const list = document.getElementById('players-list');
+                const sel1 = document.getElementById('select-p1');
+                const sel2 = document.getElementById('select-p2');
+                
+                // Guardar selecciones actuales
+                const currentP1 = sel1.value;
+                const currentP2 = sel2.value;
+
+                list.innerHTML = '';
+                sel1.innerHTML = '<option value="">-- Jugador 1 --</option>';
+                sel2.innerHTML = '<option value="">-- Jugador 2 --</option>';
+
+                Object.values(allPlayers).forEach(p => {
+                    // Lista UI
+                    list.innerHTML += `<li class="bg-slate-700 p-2 rounded text-white flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-full bg-cover" style="background-image: url('./monstruo_${p.monster}.png')"></div>
+                        ${p.name}
+                    </li>`;
+                    
+                    // Selects UI
+                    sel1.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                    sel2.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                });
+
+                // Restaurar selecciones
+                sel1.value = currentP1; sel2.value = currentP2;
+                checkAdminStartBtn();
+            });
+        }
+
+        document.getElementById('select-p1').onchange = checkAdminStartBtn;
+        document.getElementById('select-p2').onchange = checkAdminStartBtn;
+
+        function checkAdminStartBtn() {
+            const v1 = document.getElementById('select-p1').value;
+            const v2 = document.getElementById('select-p2').value;
+            const btn = document.getElementById('btn-start-battle');
+            if (v1 && v2 && v1 !== v2) {
+                btn.disabled = false;
+                btn.classList.remove('cursor-not-allowed', 'opacity-50');
+            } else {
+                btn.disabled = true;
+                btn.classList.add('cursor-not-allowed', 'opacity-50');
+            }
+        }
+
+        document.getElementById('btn-start-battle').onclick = () => {
+            const p1 = allPlayers[document.getElementById('select-p1').value];
+            const p2 = allPlayers[document.getElementById('select-p2').value];
+
+            // Setear batalla en Firebase
+            db.ref('battle_state').set({
+                status: 'countdown',
+                p1: p1,
+                p2: p2,
+                p1_vol: 0,
+                p2_vol: 0
+            });
+
+            // Preparar UI Admin
+            hideAll();
+            document.getElementById('battle-screen').classList.remove('hidden');
+            document.getElementById('battle-screen').classList.add('flex');
+            
+            document.getElementById('name-p1').innerText = p1.name;
+            document.getElementById('name-p2').innerText = p2.name;
+            document.getElementById('battle-sprite-p1').style.backgroundImage = `url('./monstruo_${p1.monster}.png')`;
+            document.getElementById('battle-sprite-p2').style.backgroundImage = `url('./monstruo_${p2.monster}.png')`;
+
+            p1_wins = 0; p2_wins = 0; currentRound = 1;
+            
+            // Escuchar volumen en tiempo real
+            db.ref('battle_state').on('value', snap => {
+                const s = snap.val();
+                if(s) {
+                    p1_vol_admin = s.p1_vol || 0;
+                    p2_vol_admin = s.p2_vol || 0;
+                }
+            });
+
+            adminStartCountdown();
+        };
+
+        function adminStartCountdown() {
+            p1_hp = 300; p2_hp = 300; adminUpdateHP();
+            document.getElementById('result-screen').classList.add('hidden');
+            const overlay = document.getElementById('countdown-overlay');
+            const number = document.getElementById('countdown-number');
+            overlay.classList.remove('hidden');
+            
+            let count = 3;
+            number.innerText = count;
+            
+            const timer = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    number.innerText = count;
+                } else if (count === 0) {
+                    number.innerText = "¡GRITAAAAAAA!";
+                    number.style.fontSize = "7rem";
+                } else {
+                    clearInterval(timer);
+                    overlay.classList.add('hidden');
+                    number.style.fontSize = "10rem";
+                    
+                    // Avisar a los jugadores que ya pueden gritar
+                    db.ref('battle_state/status').set('battle');
+                    
+                    adminGameLoopReq = requestAnimationFrame(adminGameLoop);
+                }
+            }, 1000);
+        }
+
+        const ctx = document.getElementById('volume-canvas').getContext('2d');
+
+        function adminGameLoop() {
+            // Usamos el volumen recibido de Firebase
+            const vol1 = p1_vol_admin;
+            const vol2 = p2_vol_admin;
+
+            ctx.clearRect(0, 0, 100, 350);
+            ctx.fillStyle = '#3b82f6'; ctx.fillRect(0, 350 - vol1, 50, vol1); 
+            ctx.fillStyle = '#ef4444'; ctx.fillRect(50, 350 - vol2, 50, vol2); 
+
+            const sp1 = document.getElementById('battle-sprite-p1');
+            const sp2 = document.getElementById('battle-sprite-p2');
+
+            if (vol1 > 30) {
+                sp1.classList.add('shaking');
+                if(Math.random() < 0.1) createOnomatopoeia('battle-sprite-p1');
+                p2_hp -= (vol1 * 0.025); 
+            } else sp1.classList.remove('shaking');
+
+            if (vol2 > 30) {
+                sp2.classList.add('shaking');
+                if(Math.random() < 0.1) createOnomatopoeia('battle-sprite-p2');
+                p1_hp -= (vol2 * 0.025);
+            } else sp2.classList.remove('shaking');
+
+            adminUpdateHP();
+
+            if (p1_hp <= 0 || p2_hp <= 0) {
+                cancelAnimationFrame(adminGameLoopReq);
+                adminEndRound();
+                return;
+            }
+            adminGameLoopReq = requestAnimationFrame(adminGameLoop);
+        }
+
+        function adminUpdateHP() {
+            document.getElementById('hp-p1').style.width = Math.max(0, (p1_hp / 300) * 100) + "%";
+            document.getElementById('hp-text-p1').innerText = `${Math.floor(Math.max(0, p1_hp))} / 300`;
+            document.getElementById('hp-p2').style.width = Math.max(0, (p2_hp / 300) * 100) + "%";
+            document.getElementById('hp-text-p2').innerText = `${Math.floor(Math.max(0, p2_hp))} / 300`;
+            document.getElementById('score-board').innerHTML = `<span class="text-blue-400">${p1_wins}</span> - <span class="text-red-400">${p2_wins}</span>`;
+            document.getElementById('round-num').innerText = currentRound;
+        }
+
+        function adminEndRound() {
+            // Parar a los jugadores
+            db.ref('battle_state/status').set('result');
+            
+            const resScreen = document.getElementById('result-screen');
+            const winText = document.getElementById('winner-text');
+            const btnNext = document.getElementById('btn-next');
+            const btnHome = document.getElementById('btn-home');
+            
+            resScreen.classList.remove('hidden');
+            
+            if (p2_hp <= 0) {
+                winText.innerText = "¡GANA EL JUGADOR 1!";
+                winText.className = "text-7xl font-black text-blue-400 mb-8 drop-shadow-[0_0_20px_currentColor]";
+                p1_wins++;
+            } else {
+                winText.innerText = "¡GANA EL JUGADOR 2!";
+                winText.className = "text-7xl font-black text-red-500 mb-8 drop-shadow-[0_0_20px_currentColor]";
+                p2_wins++;
+            }
+            
+            adminUpdateHP();
+
+            if (p1_wins === 2 || p2_wins === 2) {
+                winText.innerText = p1_wins === 2 ? "🏆 ¡VICTORIA ABSOLUTA J1! 🏆" : "🏆 ¡VICTORIA ABSOLUTA J2! 🏆";
+                winText.className = "text-8xl font-black text-yellow-400 mb-8 text-center";
+                btnNext.classList.add('hidden');
+                btnHome.classList.remove('hidden');
+                // Limpiar el estado de firebase para regresar todo a la normalidad
+                db.ref('battle_state').remove();
+            } else {
+                btnNext.classList.remove('hidden');
+                btnHome.classList.add('hidden');
+                btnNext.onclick = () => {
+                    currentRound++;
+                    adminStartCountdown();
+                };
+            }
+        }
+
+        function createOnomatopoeia(elementId) {
+            const container = document.getElementById(elementId);
+            const text = document.createElement('div');
+            text.className = 'onomatopoeia';
+            text.innerText = words[Math.floor(Math.random() * words.length)];
+            text.style.setProperty('--tx', (Math.random() - 0.5) * 250 + 'px');
+            text.style.setProperty('--ty', (Math.random() - 1) * 200 + 'px');
+            text.style.left = '20%'; text.style.top = '0%';
+            container.appendChild(text);
+            setTimeout(() => text.remove(), 800);
+        }
+    </script>
+</body>
+</html>
