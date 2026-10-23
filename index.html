@@ -5,15 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Grito Batalla - Meet Multiplayer</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <!-- PeerJS para transmitir las Cámaras en tiempo real -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     
     <style>
         body { margin: 0; overflow: hidden; color: white; font-family: sans-serif; user-select: none; background-color: #0f172a;}
         .hidden { display: none !important; }
         
-        #admin-lobby, #player-setup, #player-waiting { background-image: url('./fondo_lobby.jpg'); background-size: cover; background-position: center; }
+        #admin-lobby, #player-setup, #player-waiting, #role-selection { background-image: url('./fondo_lobby.jpg'); background-size: cover; background-position: center; }
         #battle-screen { background-image: url('./fondo_batalla.jpg'); background-size: cover; background-position: center; }
 
         .monster-container {
@@ -22,79 +25,96 @@
         }
         .monster-container.selected { border: 4px solid #3b82f6; transform: scale(1.1); box-shadow: 0 0 15px #3b82f6;}
         
-        .battle-monster { width: 350px; height: 350px; }
-        .hp-bar-bg { background-color: #ef4444; width: 100%; height: 30px; border-radius: 15px; border: 3px solid #000; position: relative;}
-        .hp-bar-fill { background-color: #22c55e; height: 100%; transition: width 0.1s linear; border-radius: 12px;}
-        .hp-text { position: absolute; width: 100%; text-align: center; top: 2px; font-weight: bold; text-shadow: 1px 1px 2px black; }
+        /* Cámara dentro del monstruo */
+        .cam-container { position: absolute; width: 40%; height: 30%; top: 55%; left: 30%; background: #000; z-index: 10; overflow: hidden; border-radius: 5px; }
+        .cam-container video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 
-        @keyframes shake { 0% { transform: translate(1px, 1px) rotate(0deg); } 25% { transform: translate(-3px, 0px) rotate(2deg); } 50% { transform: translate(1px, -1px) rotate(-1deg); } 75% { transform: translate(-3px, 1px) rotate(1deg); } 100% { transform: translate(1px, -2px) rotate(-1deg); } }
-        .shaking { animation: shake 0.1s infinite; }
-        .onomatopoeia { position: absolute; font-size: 3rem; font-weight: 900; color: #fbbf24; -webkit-text-stroke: 2px #b91c1c; text-shadow: 3px 3px 0 #000; animation: popOut 0.8s forwards; pointer-events: none; z-index: 50; }
-        @keyframes popOut { 0% { transform: scale(0.1); opacity: 1; } 50% { transform: scale(1.2) translate(var(--tx), var(--ty)); opacity: 1; } 100% { transform: scale(1) translate(calc(var(--tx) * 1.5), calc(var(--ty) * 1.5)); opacity: 0; } }
+        .battle-monster { width: 350px; height: 350px; }
+        .hp-bar-bg { background-color: #ef4444; width: 100%; height: 35px; border-radius: 20px; border: 3px solid #000; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.6);}
+        .hp-bar-fill { background-color: #22c55e; height: 100%; transition: width 0.1s linear; border-radius: 16px;}
+        .hp-text { position: absolute; width: 100%; text-align: center; top: 4px; font-weight: 900; font-size: 1.1rem; text-shadow: 2px 2px 2px black; }
+
+        /* Animación Exagerada de Daño */
+        @keyframes extremeShake { 
+            0% { transform: translate(3px, 3px) rotate(0deg) scale(1.05); } 
+            20% { transform: translate(-6px, 0px) rotate(5deg) scale(1.05); } 
+            40% { transform: translate(4px, -4px) rotate(-5deg) scale(1.05); } 
+            60% { transform: translate(-6px, 4px) rotate(5deg) scale(1.05); } 
+            80% { transform: translate(-3px, -3px) rotate(-5deg) scale(1.05); } 
+            100% { transform: translate(3px, -5px) rotate(0deg) scale(1.05); } 
+        }
+        .shaking { animation: extremeShake 0.1s infinite; filter: drop-shadow(0 0 20px #ef4444); }
+        
+        .onomatopoeia { position: absolute; font-size: 4.5rem; font-weight: 900; color: #fbbf24; -webkit-text-stroke: 3px #b91c1c; text-shadow: 5px 5px 0 #000; animation: popOut 0.7s forwards; pointer-events: none; z-index: 50; }
+        @keyframes popOut { 0% { transform: scale(0.1); opacity: 1; } 50% { transform: scale(1.3) translate(var(--tx), var(--ty)); opacity: 1; } 100% { transform: scale(1.1) translate(calc(var(--tx) * 1.5), calc(var(--ty) * 1.5)); opacity: 0; } }
 
         /* Overlay Cuenta Regresiva */
-        #countdown-overlay { background: rgba(0,0,0,0.7); z-index: 100; display: flex; justify-content: center; align-items: center; }
-        .countdown-text { font-size: 10rem; font-weight: 900; color: yellow; text-shadow: 0 0 20px red; animation: pulse 1s infinite; }
+        #countdown-overlay { background: rgba(0,0,0,0.75); z-index: 100; display: flex; justify-content: center; align-items: center; }
+        .countdown-text { font-size: 12rem; font-weight: 900; color: #fbbf24; text-shadow: 0 0 30px #ef4444; animation: pulse 1s infinite; }
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
     </style>
 </head>
 <body>
 
     <!-- PANTALLA 1: ELEGIR ROL -->
-    <div id="role-selection" class="min-h-screen flex flex-col items-center justify-center p-8 bg-slate-900">
-        <h1 class="text-6xl font-black mb-10 text-white drop-shadow-lg text-center" style="-webkit-text-stroke: 2px #3b82f6;">BOW-WOW BATTLE</h1>
-        <div class="flex gap-8">
-            <button onclick="showAdminLobby()" class="bg-red-600 hover:bg-red-500 text-white font-bold py-6 px-10 rounded-2xl text-2xl shadow-lg border-2 border-red-400">👑 Entrar como ADMIN (Host Meet)</button>
-            <button onclick="showPlayerSetup()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-6 px-10 rounded-2xl text-2xl shadow-lg border-2 border-blue-400">🎮 Entrar como JUGADOR</button>
+    <div id="role-selection" class="min-h-screen flex flex-col items-center justify-center p-8 relative">
+        <div class="absolute inset-0 bg-black bg-opacity-50 z-0"></div>
+        <div class="z-10 flex flex-col items-center">
+            <h1 class="text-7xl font-black mb-12 text-white drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]" style="-webkit-text-stroke: 2px #3b82f6;">BOW-WOW BATTLE</h1>
+            <div class="flex gap-8">
+                <button onclick="showAdminLobby()" class="bg-red-600 hover:bg-red-500 text-white font-black py-6 px-10 rounded-2xl text-2xl shadow-[0_0_20px_rgba(239,68,68,0.5)] border-2 border-red-400 transition transform hover:scale-105">👑 Entrar como ADMIN (Host Meet)</button>
+                <button onclick="showPlayerSetup()" class="bg-blue-600 hover:bg-blue-500 text-white font-black py-6 px-10 rounded-2xl text-2xl shadow-[0_0_20px_rgba(59,130,246,0.5)] border-2 border-blue-400 transition transform hover:scale-105">🎮 Entrar como JUGADOR</button>
+            </div>
         </div>
     </div>
 
     <!-- PANTALLA 2 (JUGADOR): CONFIGURACIÓN -->
     <div id="player-setup" class="hidden min-h-screen flex-col items-center justify-center p-8 relative">
-        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
-        <div class="z-10 flex flex-col items-center bg-slate-900 bg-opacity-90 p-8 rounded-2xl border border-gray-700">
-            <h2 class="text-4xl font-bold mb-4 text-blue-300">Regístrate para la Batalla</h2>
-            <input type="text" id="player-name" placeholder="Escribe tu Nombre" class="px-4 py-3 mb-6 rounded text-black font-bold text-center text-xl w-full">
-            <div id="monster-grid" class="grid grid-cols-4 gap-4 mb-6"></div>
-            <button id="btn-join" class="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-8 rounded-full text-xl shadow-lg">Entrar a la Sala de Espera</button>
+        <div class="absolute inset-0 bg-black bg-opacity-70 z-0"></div>
+        <div class="z-10 flex flex-col items-center bg-slate-900 bg-opacity-95 p-10 rounded-3xl border border-gray-700 shadow-2xl">
+            <h2 class="text-4xl font-bold mb-2 text-blue-400">Regístrate para la Batalla</h2>
+            <p class="text-gray-300 mb-6 font-bold">Selecciona tu monstruo e ingresa tu nombre</p>
+            <input type="text" id="player-name" placeholder="Escribe tu Nombre" class="px-4 py-3 mb-8 rounded text-black font-black text-center text-2xl w-full border-4 border-gray-400 focus:border-blue-500 outline-none">
+            <div id="monster-grid" class="grid grid-cols-4 gap-4 mb-8"></div>
+            <button id="btn-join" class="bg-green-500 hover:bg-green-400 text-white font-black py-4 px-10 rounded-full text-2xl shadow-lg border-2 border-green-300 transition transform hover:scale-105 w-full">Entrar a la Sala de Espera</button>
         </div>
     </div>
 
     <!-- PANTALLA 3 (JUGADOR): ESPERANDO / JUGANDO -->
     <div id="player-waiting" class="hidden min-h-screen flex-col items-center justify-center p-8 relative text-center">
-        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
-        <div class="z-10 bg-slate-900 bg-opacity-90 p-10 rounded-2xl border border-gray-700">
-            <h2 id="player-status-title" class="text-5xl font-bold mb-4 text-yellow-400">En el Lobby...</h2>
-            <p id="player-status-desc" class="text-2xl text-gray-300 mb-6">Espera a que el Administrador inicie tu batalla.</p>
-            <div id="player-mic-status" class="text-xl font-bold"></div>
-            <!-- Botón de emergencia por si no funciona el micro -->
-            <button id="btn-scream-click" class="hidden mt-8 bg-red-600 active:bg-red-800 text-white font-black py-10 px-20 rounded-3xl text-4xl shadow-2xl border-4 border-red-400 w-full">¡CLIC PARA GRITAR!</button>
+        <div class="absolute inset-0 bg-black bg-opacity-70 z-0"></div>
+        <div class="z-10 bg-slate-900 bg-opacity-95 p-12 rounded-3xl border border-gray-700 shadow-2xl max-w-2xl w-full">
+            <h2 id="player-status-title" class="text-6xl font-black mb-4 text-yellow-400 drop-shadow-lg">En el Lobby...</h2>
+            <p id="player-status-desc" class="text-2xl text-gray-300 mb-8 font-bold">Espera a que el Administrador inicie tu batalla.</p>
+            <div id="player-mic-status" class="text-xl font-bold bg-black p-4 rounded-xl">Iniciando hardware...</div>
+            
+            <button id="btn-scream-click" class="hidden mt-8 bg-red-600 active:bg-red-800 text-white font-black py-12 px-20 rounded-3xl text-5xl shadow-[0_0_30px_rgba(239,68,68,0.8)] border-4 border-white w-full transition transform active:scale-95">¡CLIC PARA ATACAR!</button>
         </div>
     </div>
 
     <!-- PANTALLA 4 (ADMIN): LOBBY -->
     <div id="admin-lobby" class="hidden min-h-screen flex-col p-8 relative">
-        <div class="absolute inset-0 bg-black bg-opacity-60 z-0"></div>
-        <div class="z-10 flex flex-col w-full max-w-5xl mx-auto bg-slate-900 bg-opacity-90 p-8 rounded-2xl border border-gray-700 mt-10">
-            <h2 class="text-5xl font-bold mb-8 text-white text-center">Panel de Control - Lobby</h2>
+        <div class="absolute inset-0 bg-black bg-opacity-70 z-0"></div>
+        <div class="z-10 flex flex-col w-full max-w-6xl mx-auto bg-slate-900 bg-opacity-95 p-8 rounded-3xl border border-gray-700 mt-10 shadow-2xl">
+            <h2 class="text-5xl font-black mb-8 text-white text-center drop-shadow-md">Panel de Control - Lobby</h2>
             
             <div class="flex justify-between items-start gap-8 mb-8">
                 <!-- Lista Jugadores Conectados -->
-                <div class="w-1/3 bg-slate-800 p-4 rounded-xl border border-gray-600 h-96 overflow-y-auto">
-                    <h3 class="text-2xl font-bold mb-4 text-blue-300">Jugadores Conectados</h3>
-                    <ul id="players-list" class="space-y-2"></ul>
+                <div class="w-1/3 bg-slate-800 p-6 rounded-2xl border border-gray-600 h-[28rem] overflow-y-auto shadow-inner">
+                    <h3 class="text-2xl font-bold mb-4 text-blue-400">Jugadores Online</h3>
+                    <ul id="players-list" class="space-y-3"></ul>
                 </div>
                 
                 <!-- Matchmaking -->
-                <div class="w-2/3 flex flex-col items-center justify-center bg-slate-800 p-8 rounded-xl border border-gray-600 h-96">
-                    <h3 class="text-3xl font-bold mb-8 text-yellow-400">Armar Batalla</h3>
-                    <div class="flex gap-8 w-full justify-center mb-8">
-                        <select id="select-p1" class="text-black text-xl p-3 rounded font-bold w-48"><option value="">-- Jugador 1 --</option></select>
-                        <div class="text-4xl font-black text-red-500 pt-2">VS</div>
-                        <select id="select-p2" class="text-black text-xl p-3 rounded font-bold w-48"><option value="">-- Jugador 2 --</option></select>
+                <div class="w-2/3 flex flex-col items-center justify-center bg-slate-800 p-8 rounded-2xl border border-gray-600 h-[28rem] shadow-inner">
+                    <h3 class="text-4xl font-black mb-10 text-yellow-400">Armar Batalla</h3>
+                    <div class="flex gap-8 w-full justify-center mb-12">
+                        <select id="select-p1" class="text-black text-2xl p-4 rounded-xl font-bold w-64 border-4 border-blue-500"><option value="">- Jugador 1 -</option></select>
+                        <div class="text-6xl font-black text-red-500 pt-2 drop-shadow-md">VS</div>
+                        <select id="select-p2" class="text-black text-2xl p-4 rounded-xl font-bold w-64 border-4 border-red-500"><option value="">- Jugador 2 -</option></select>
                     </div>
-                    <button id="btn-start-battle" class="bg-red-600 hover:bg-red-500 text-white font-bold py-4 px-10 rounded-full text-2xl shadow-xl w-full cursor-not-allowed opacity-50" disabled>
-                        ⚔️ INICIAR BATALLA (Mejor de 3) ⚔️
+                    <button id="btn-start-battle" class="bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 text-white font-black py-5 px-12 rounded-full text-3xl shadow-[0_0_20px_rgba(239,68,68,0.5)] border-4 border-red-400 w-full cursor-not-allowed opacity-50 transition transform" disabled>
+                        ⚔️ INICIAR BATALLA ⚔️
                     </button>
                 </div>
             </div>
@@ -103,41 +123,55 @@
 
     <!-- PANTALLA 5 (ADMIN): BATALLA COMPARTIDA EN MEET -->
     <div id="battle-screen" class="hidden w-screen h-screen relative flex-col justify-between">
-        <div class="absolute inset-0 bg-black bg-opacity-30 z-0"></div>
+        <div class="absolute inset-0 bg-black bg-opacity-40 z-0"></div>
         <div id="countdown-overlay" class="absolute inset-0 hidden"><div id="countdown-number" class="countdown-text">3</div></div>
 
-        <!-- UI Superior -->
-        <div class="z-10 flex justify-between p-8 w-full max-w-6xl mx-auto bg-black bg-opacity-60 rounded-b-3xl shadow-xl">
-            <div class="w-2/5">
-                <div class="text-3xl font-black text-white mb-2" id="name-p1">Jugador 1</div>
-                <div class="hp-bar-bg"><div id="hp-p1" class="hp-bar-fill"></div><div id="hp-text-p1" class="hp-text">300 / 300</div></div>
+        <!-- MARCADOR CENTRAL ESTÉTICO -->
+        <div class="z-20 absolute top-4 left-1/2 transform -translate-x-1/2 flex flex-col items-center w-full max-w-md">
+            <div class="text-6xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(255,255,0,0.8)] bg-black bg-opacity-60 px-10 py-1 rounded-t-2xl border-t-2 border-l-2 border-r-2 border-yellow-500">RONDA <span id="round-num">1</span></div>
+            <div class="text-3xl font-black text-white bg-slate-900 bg-opacity-90 px-10 py-3 rounded-b-3xl border-2 border-gray-500 shadow-[0_10px_20px_rgba(0,0,0,0.8)] w-full text-center">
+                MARCADOR: <span id="score-board-p1" class="text-blue-400">0</span> - <span id="score-board-p2" class="text-red-400">0</span>
             </div>
-            <div class="text-center flex flex-col justify-center">
-                <div class="text-5xl font-black text-yellow-400">Ronda <span id="round-num">1</span></div>
-                <div class="text-2xl font-bold text-white mt-2 bg-gray-900 px-4 py-1 rounded-full border border-gray-600">Marcador: <span id="score-board" class="text-blue-400">0</span> - <span class="text-red-400">0</span></div>
+        </div>
+
+        <!-- UI Superior (Vidas) -->
+        <div class="z-10 flex justify-between px-10 pt-10 w-full max-w-7xl mx-auto">
+            <div class="w-2/5">
+                <div class="text-4xl font-black text-white mb-2 drop-shadow-md uppercase bg-black bg-opacity-50 inline-block px-4 py-1 rounded" id="name-p1">Jugador 1</div>
+                <div class="hp-bar-bg"><div id="hp-p1" class="hp-bar-fill shadow-inner"></div><div id="hp-text-p1" class="hp-text">500 / 500</div></div>
             </div>
             <div class="w-2/5 text-right">
-                <div class="text-3xl font-black text-white mb-2" id="name-p2">Jugador 2</div>
-                <div class="hp-bar-bg flex justify-end"><div id="hp-p2" class="hp-bar-fill"></div><div id="hp-text-p2" class="hp-text">300 / 300</div></div>
+                <div class="text-4xl font-black text-white mb-2 drop-shadow-md uppercase bg-black bg-opacity-50 inline-block px-4 py-1 rounded" id="name-p2">Jugador 2</div>
+                <div class="hp-bar-bg flex justify-end"><div id="hp-p2" class="hp-bar-fill shadow-inner"></div><div id="hp-text-p2" class="hp-text">500 / 500</div></div>
             </div>
         </div>
 
         <!-- Escenario Inferior -->
-        <div class="z-10 flex-grow flex justify-between items-end pb-10 px-20 max-w-7xl mx-auto w-full">
-            <div id="battle-sprite-p1" class="monster-container battle-monster drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]"></div>
+        <div class="z-10 flex-grow flex justify-between items-end pb-10 px-24 max-w-7xl mx-auto w-full">
+            <div id="battle-sprite-p1" class="monster-container battle-monster drop-shadow-[0_15px_25px_rgba(0,0,0,0.9)]">
+                <!-- Video de cámara web p1 -->
+                <div class="cam-container border-2 border-blue-500"><video id="battle-video-p1" autoplay muted playsinline></video></div>
+            </div>
             
-            <div class="flex flex-col items-center justify-end pb-4">
-                <canvas id="volume-canvas" width="100" height="350" class="bg-black bg-opacity-70 border-4 border-gray-800 rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.8)]"></canvas>
+            <div class="flex flex-col items-center justify-end pb-6">
+                <canvas id="volume-canvas" width="120" height="400" class="bg-black bg-opacity-80 border-4 border-gray-700 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.9)]"></canvas>
             </div>
 
-            <div id="battle-sprite-p2" class="monster-container battle-monster drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]" style="transform: scaleX(-1);"></div>
+            <div id="battle-sprite-p2" class="monster-container battle-monster drop-shadow-[0_15px_25px_rgba(0,0,0,0.9)]" style="transform: scaleX(-1);">
+                <!-- Video de cámara web p2 -->
+                <div class="cam-container border-2 border-red-500" style="transform: scaleX(-1);"><video id="battle-video-p2" autoplay muted playsinline></video></div>
+            </div>
         </div>
         
-        <!-- PANTALLA RESULTADO RONDA -->
-        <div id="result-screen" class="hidden absolute inset-0 z-50 flex flex-col items-center justify-center bg-black bg-opacity-90">
-            <h2 id="winner-text" class="text-8xl font-black mb-8 drop-shadow-[0_0_20px_currentColor]"></h2>
-            <button id="btn-next" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-10 rounded-full text-3xl hidden shadow-2xl">Siguiente Ronda</button>
-            <button id="btn-home" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-4 px-10 rounded-full text-2xl hidden mt-6" onclick="location.reload()">Volver al Lobby</button>
+        <!-- PANTALLA RESULTADO RONDA/FINAL -->
+        <div id="result-screen" class="hidden absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-900 bg-opacity-95">
+            <h2 id="winner-text" class="text-8xl font-black mb-6 drop-shadow-[0_0_25px_currentColor] text-center px-4"></h2>
+            
+            <!-- Contenedor del Monstruo Ganador -->
+            <div id="winner-monster-result" class="w-64 h-64 bg-cover bg-center rounded-2xl border-4 border-yellow-400 mb-8 shadow-[0_0_40px_rgba(255,255,0,0.6)]"></div>
+            
+            <button id="btn-next" class="bg-blue-600 hover:bg-blue-500 text-white font-black py-5 px-12 rounded-full text-4xl hidden shadow-[0_0_20px_rgba(59,130,246,0.8)] border-4 border-blue-300 transition transform hover:scale-105">Siguiente Ronda</button>
+            <button id="btn-home" class="bg-gray-600 hover:bg-gray-500 text-white font-black py-5 px-12 rounded-full text-3xl hidden mt-6 border-4 border-gray-400" onclick="location.reload()">Volver al Lobby</button>
         </div>
     </div>
 
@@ -156,33 +190,41 @@
             measurementId: "G-RST4CJZPQT"
         };
         
-        // Inicializar Firebase
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
         // Variables Globales
         let myPlayerId = 'user_' + Math.random().toString(36).substr(2, 9);
         let selectedIndex = 0;
+        let MAX_HP = 500; // Vida aumentada a 500 para batallas de 30s
         
-        // Variables de Audio (Solo para jugadores)
+        // Variables de Audio/Video (Jugadores)
         let audioContext, analyser, dataArray;
         let localStream = null;
         let clickVolume = 0;
         let isMyTurnToBattle = false;
-        let playerRoleInBattle = null; // 'p1' o 'p2'
+        let playerRoleInBattle = null; 
         let audioSenderInterval;
+        let peer = null; // Instancia PeerJS
+        let currentCall = null;
 
-        // Variables de Admin
-        let p1_hp = 300, p2_hp = 300, p1_wins = 0, p2_wins = 0, currentRound = 1;
+        // Variables Admin
+        let p1_hp = MAX_HP, p2_hp = MAX_HP, p1_wins = 0, p2_wins = 0, currentRound = 1;
         let p1_vol_admin = 0, p2_vol_admin = 0;
+        let currentP1 = null, currentP2 = null;
         let adminGameLoopReq;
-        const words = ["¡WOOF!", "¡GRRR!", "¡AHHH!", "¡RAAAW!", "¡BOOM!", "¡ZAS!"];
+        let playerStreams = {}; // Almacena las cámaras recibidas
+        const words = ["¡WOOF!", "¡GRRR!", "¡AHHH!", "¡RAAAW!", "¡BOOM!", "¡ZAS!", "¡KABOOM!"];
 
         // ==========================================
         // UI NAVEGACIÓN BASICA
         // ==========================================
         function hideAll() {
-            document.querySelectorAll('body > div').forEach(el => el.classList.add('hidden'));
+            document.getElementById('role-selection').classList.add('hidden');
+            document.getElementById('player-setup').classList.add('hidden');
+            document.getElementById('player-waiting').classList.add('hidden');
+            document.getElementById('admin-lobby').classList.add('hidden');
+            document.getElementById('battle-screen').classList.add('hidden');
         }
 
         // ==========================================
@@ -193,7 +235,6 @@
             document.getElementById('player-setup').classList.remove('hidden');
             document.getElementById('player-setup').classList.add('flex');
             
-            // Dibujar grilla de monstruos
             const grid = document.getElementById('monster-grid');
             grid.innerHTML = '';
             for (let i = 0; i < 8; i++) {
@@ -211,70 +252,83 @@
 
         document.getElementById('btn-join').onclick = async () => {
             const name = document.getElementById('player-name').value || "Invitado";
-            
             hideAll();
             document.getElementById('player-waiting').classList.remove('hidden');
             document.getElementById('player-waiting').classList.add('flex');
 
-            const statusTitle = document.getElementById('player-status-title');
             const micStatus = document.getElementById('player-mic-status');
             const clickBtn = document.getElementById('btn-scream-click');
 
-            // 1. Pedir permisos de solo Audio (ya que no queremos video)
+            // 1. Pedir Hardware (Intentar Cámara + Micrófono)
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                micStatus.innerHTML = "<span class='text-green-400'>✅ Micrófono conectado.</span> ¡Prepárate para gritar!";
-                
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                micStatus.innerHTML = "<span class='text-green-400'>✅ Cámara y Micrófono conectados.</span><br>¡Saldrás en pantalla!";
+            } catch (e) {
+                // Intento 2: Solo micrófono
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+                    micStatus.innerHTML = "<span class='text-yellow-400'>⚠️ Sin cámara (solo audio).</span><br>El administrador no verá tu rostro, pero tu grito hará daño.";
+                } catch (err) {
+                    // Intento 3: Nada
+                    micStatus.innerHTML = "<span class='text-red-400'>❌ Sin cámara ni micrófono.</span><br>¡Usa el botón gigante de la pantalla para atacar!";
+                    clickBtn.classList.remove('hidden');
+                    clickBtn.onclick = () => { if(isMyTurnToBattle) clickVolume = 120; };
+                }
+            }
+
+            if (localStream) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
                 audioContext.createMediaStreamSource(localStream).connect(analyser);
                 dataArray = new Uint8Array(analyser.frequencyBinCount);
-            } catch (err) {
-                micStatus.innerHTML = "<span class='text-red-400'>⚠️ Sin micrófono.</span> Usarás el botón para atacar.";
-                clickBtn.classList.remove('hidden'); // Mostrar botón de pánico
-                
-                clickBtn.onclick = () => { if(isMyTurnToBattle) clickVolume = 120; };
+
+                // 2. Conectar WebRTC (PeerJS) para enviar cámara al Admin
+                peer = new Peer(myPlayerId);
+                peer.on('open', () => {
+                    // Escuchar la ID del admin y llamarlo automáticamente
+                    db.ref('admin_info').on('value', snap => {
+                        const info = snap.val();
+                        if (info && info.peerId && localStream && !peer.disconnected) {
+                            if (currentCall) currentCall.close();
+                            currentCall = peer.call(info.peerId, localStream);
+                        }
+                    });
+                });
             }
 
-            // 2. Escribirse en Firebase (Lobby)
+            // 3. Escribirse en Firebase (Lobby)
             db.ref('lobby/' + myPlayerId).set({
                 id: myPlayerId,
                 name: name,
                 monster: selectedIndex,
                 timestamp: firebase.database.ServerValue.TIMESTAMP
             });
-
-            // Borrarse al cerrar pestaña
             db.ref('lobby/' + myPlayerId).onDisconnect().remove();
 
-            // 3. Escuchar el estado del juego para saber si me seleccionaron
+            // 4. Escuchar si me eligen para pelear
+            const statusTitle = document.getElementById('player-status-title');
             db.ref('battle_state').on('value', snap => {
                 const state = snap.val();
                 if (!state) return;
 
                 if (state.status === 'battle' && (state.p1.id === myPlayerId || state.p2.id === myPlayerId)) {
-                    // ¡ME ELIGIERON Y LA BATALLA EMPEZÓ!
                     isMyTurnToBattle = true;
                     playerRoleInBattle = state.p1.id === myPlayerId ? 'p1_vol' : 'p2_vol';
                     
                     statusTitle.innerText = "¡ES TU TURNO!";
-                    statusTitle.className = "text-6xl font-black mb-4 text-red-500 animate-pulse";
+                    statusTitle.className = "text-6xl font-black mb-4 text-red-500 animate-pulse drop-shadow-[0_0_15px_red]";
                     document.getElementById('player-status-desc').innerText = "¡GRITA PARA ATACAR AHORA MISMO!";
                     document.getElementById('player-waiting').classList.add('border-8', 'border-red-600');
                     
                     if (audioContext && audioContext.state === 'suspended') audioContext.resume();
-                    
-                    // Empezar a enviar volumen a Firebase 10 veces por segundo
                     clearInterval(audioSenderInterval);
                     audioSenderInterval = setInterval(sendVolumeToFirebase, 100);
                 } else {
-                    // Esperando...
                     isMyTurnToBattle = false;
                     clearInterval(audioSenderInterval);
-                    
                     statusTitle.innerText = "En el Lobby...";
-                    statusTitle.className = "text-5xl font-bold mb-4 text-yellow-400";
-                    document.getElementById('player-status-desc').innerText = "Espera tu turno para batallar.";
+                    statusTitle.className = "text-6xl font-black mb-4 text-yellow-400 drop-shadow-lg";
+                    document.getElementById('player-status-desc').innerText = "Espera a que el Administrador inicie tu batalla.";
                     document.getElementById('player-waiting').classList.remove('border-8', 'border-red-600');
                 }
             });
@@ -287,9 +341,8 @@
                 vol = (dataArray.reduce((a, b) => a + b) / dataArray.length) * 1.8;
             } else {
                 vol = clickVolume;
-                clickVolume = Math.max(0, clickVolume - 10);
+                clickVolume = Math.max(0, clickVolume - 8);
             }
-            // Enviar a firebase
             db.ref('battle_state/' + playerRoleInBattle).set(vol);
         }
 
@@ -303,35 +356,52 @@
             document.getElementById('admin-lobby').classList.remove('hidden');
             document.getElementById('admin-lobby').classList.add('flex');
 
-            // Leer jugadores del lobby en tiempo real
+            // 1. Configurar WebRTC para recibir llamadas (Cámaras de los jugadores)
+            const myAdminPeerId = 'admin_' + Math.random().toString(36).substr(2, 9);
+            db.ref('admin_info').set({ peerId: myAdminPeerId });
+            db.ref('admin_info').onDisconnect().remove();
+
+            const adminPeer = new Peer(myAdminPeerId);
+            adminPeer.on('call', call => {
+                call.answer(); // Acepta la llamada sin enviar video
+                call.on('stream', remoteStream => {
+                    const playerId = call.peer;
+                    playerStreams[playerId] = remoteStream; // Guardar el stream
+                    
+                    // Si estamos en batalla y este jugador es uno de los activos, conectar video
+                    if (document.getElementById('battle-screen').classList.contains('flex')) {
+                        if (currentP1 && currentP1.id === playerId) {
+                            document.getElementById('battle-video-p1').srcObject = remoteStream;
+                        } else if (currentP2 && currentP2.id === playerId) {
+                            document.getElementById('battle-video-p2').srcObject = remoteStream;
+                        }
+                    }
+                });
+            });
+
+            // 2. Leer Lobby
             db.ref('lobby').on('value', snap => {
                 allPlayers = snap.val() || {};
                 const list = document.getElementById('players-list');
                 const sel1 = document.getElementById('select-p1');
                 const sel2 = document.getElementById('select-p2');
                 
-                // Guardar selecciones actuales
-                const currentP1 = sel1.value;
-                const currentP2 = sel2.value;
+                const valP1 = sel1.value; const valP2 = sel2.value;
 
                 list.innerHTML = '';
-                sel1.innerHTML = '<option value="">-- Jugador 1 --</option>';
-                sel2.innerHTML = '<option value="">-- Jugador 2 --</option>';
+                sel1.innerHTML = '<option value="">- Jugador 1 -</option>';
+                sel2.innerHTML = '<option value="">- Jugador 2 -</option>';
 
                 Object.values(allPlayers).forEach(p => {
-                    // Lista UI
-                    list.innerHTML += `<li class="bg-slate-700 p-2 rounded text-white flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-cover" style="background-image: url('./monstruo_${p.monster}.png')"></div>
+                    list.innerHTML += `<li class="bg-slate-700 p-3 rounded-lg text-white font-bold flex items-center gap-4 text-xl">
+                        <div class="w-10 h-10 rounded-full bg-cover border-2 border-gray-400" style="background-image: url('./monstruo_${p.monster}.png')"></div>
                         ${p.name}
                     </li>`;
-                    
-                    // Selects UI
                     sel1.innerHTML += `<option value="${p.id}">${p.name}</option>`;
                     sel2.innerHTML += `<option value="${p.id}">${p.name}</option>`;
                 });
 
-                // Restaurar selecciones
-                sel1.value = currentP1; sel2.value = currentP2;
+                sel1.value = valP1; sel2.value = valP2;
                 checkAdminStartBtn();
             });
         }
@@ -344,53 +414,45 @@
             const v2 = document.getElementById('select-p2').value;
             const btn = document.getElementById('btn-start-battle');
             if (v1 && v2 && v1 !== v2) {
-                btn.disabled = false;
-                btn.classList.remove('cursor-not-allowed', 'opacity-50');
+                btn.disabled = false; btn.classList.remove('cursor-not-allowed', 'opacity-50');
             } else {
-                btn.disabled = true;
-                btn.classList.add('cursor-not-allowed', 'opacity-50');
+                btn.disabled = true; btn.classList.add('cursor-not-allowed', 'opacity-50');
             }
         }
 
         document.getElementById('btn-start-battle').onclick = () => {
-            const p1 = allPlayers[document.getElementById('select-p1').value];
-            const p2 = allPlayers[document.getElementById('select-p2').value];
+            currentP1 = allPlayers[document.getElementById('select-p1').value];
+            currentP2 = allPlayers[document.getElementById('select-p2').value];
 
-            // Setear batalla en Firebase
             db.ref('battle_state').set({
-                status: 'countdown',
-                p1: p1,
-                p2: p2,
-                p1_vol: 0,
-                p2_vol: 0
+                status: 'countdown', p1: currentP1, p2: currentP2, p1_vol: 0, p2_vol: 0
             });
 
-            // Preparar UI Admin
             hideAll();
             document.getElementById('battle-screen').classList.remove('hidden');
             document.getElementById('battle-screen').classList.add('flex');
             
-            document.getElementById('name-p1').innerText = p1.name;
-            document.getElementById('name-p2').innerText = p2.name;
-            document.getElementById('battle-sprite-p1').style.backgroundImage = `url('./monstruo_${p1.monster}.png')`;
-            document.getElementById('battle-sprite-p2').style.backgroundImage = `url('./monstruo_${p2.monster}.png')`;
+            document.getElementById('name-p1').innerText = currentP1.name;
+            document.getElementById('name-p2').innerText = currentP2.name;
+            document.getElementById('battle-sprite-p1').style.backgroundImage = `url('./monstruo_${currentP1.monster}.png')`;
+            document.getElementById('battle-sprite-p2').style.backgroundImage = `url('./monstruo_${currentP2.monster}.png')`;
+
+            // Conectar las cámaras si ya están almacenadas
+            document.getElementById('battle-video-p1').srcObject = playerStreams[currentP1.id] || null;
+            document.getElementById('battle-video-p2').srcObject = playerStreams[currentP2.id] || null;
 
             p1_wins = 0; p2_wins = 0; currentRound = 1;
             
-            // Escuchar volumen en tiempo real
             db.ref('battle_state').on('value', snap => {
                 const s = snap.val();
-                if(s) {
-                    p1_vol_admin = s.p1_vol || 0;
-                    p2_vol_admin = s.p2_vol || 0;
-                }
+                if(s) { p1_vol_admin = s.p1_vol || 0; p2_vol_admin = s.p2_vol || 0; }
             });
 
             adminStartCountdown();
         };
 
         function adminStartCountdown() {
-            p1_hp = 300; p2_hp = 300; adminUpdateHP();
+            p1_hp = MAX_HP; p2_hp = MAX_HP; adminUpdateHP();
             document.getElementById('result-screen').classList.add('hidden');
             const overlay = document.getElementById('countdown-overlay');
             const number = document.getElementById('countdown-number');
@@ -401,19 +463,15 @@
             
             const timer = setInterval(() => {
                 count--;
-                if (count > 0) {
-                    number.innerText = count;
-                } else if (count === 0) {
+                if (count > 0) { number.innerText = count; } 
+                else if (count === 0) {
                     number.innerText = "¡GRITAAAAAAA!";
-                    number.style.fontSize = "7rem";
+                    number.style.fontSize = "10rem";
                 } else {
                     clearInterval(timer);
                     overlay.classList.add('hidden');
-                    number.style.fontSize = "10rem";
-                    
-                    // Avisar a los jugadores que ya pueden gritar
+                    number.style.fontSize = "12rem";
                     db.ref('battle_state/status').set('battle');
-                    
                     adminGameLoopReq = requestAnimationFrame(adminGameLoop);
                 }
             }, 1000);
@@ -422,27 +480,27 @@
         const ctx = document.getElementById('volume-canvas').getContext('2d');
 
         function adminGameLoop() {
-            // Usamos el volumen recibido de Firebase
             const vol1 = p1_vol_admin;
             const vol2 = p2_vol_admin;
 
-            ctx.clearRect(0, 0, 100, 350);
-            ctx.fillStyle = '#3b82f6'; ctx.fillRect(0, 350 - vol1, 50, vol1); 
-            ctx.fillStyle = '#ef4444'; ctx.fillRect(50, 350 - vol2, 50, vol2); 
+            ctx.clearRect(0, 0, 120, 400);
+            ctx.fillStyle = '#3b82f6'; ctx.fillRect(0, 400 - vol1, 60, vol1); 
+            ctx.fillStyle = '#ef4444'; ctx.fillRect(60, 400 - vol2, 60, vol2); 
 
             const sp1 = document.getElementById('battle-sprite-p1');
             const sp2 = document.getElementById('battle-sprite-p2');
 
-            if (vol1 > 30) {
+            // Daño ajustado: Multiplicador muy bajo (0.005) para que 500 de vida duren unos 30-35 segundos
+            if (vol1 > 20) {
                 sp1.classList.add('shaking');
                 if(Math.random() < 0.1) createOnomatopoeia('battle-sprite-p1');
-                p2_hp -= (vol1 * 0.025); 
+                p2_hp -= (vol1 * 0.005); 
             } else sp1.classList.remove('shaking');
 
-            if (vol2 > 30) {
+            if (vol2 > 20) {
                 sp2.classList.add('shaking');
                 if(Math.random() < 0.1) createOnomatopoeia('battle-sprite-p2');
-                p1_hp -= (vol2 * 0.025);
+                p1_hp -= (vol2 * 0.005);
             } else sp2.classList.remove('shaking');
 
             adminUpdateHP();
@@ -456,45 +514,49 @@
         }
 
         function adminUpdateHP() {
-            document.getElementById('hp-p1').style.width = Math.max(0, (p1_hp / 300) * 100) + "%";
-            document.getElementById('hp-text-p1').innerText = `${Math.floor(Math.max(0, p1_hp))} / 300`;
-            document.getElementById('hp-p2').style.width = Math.max(0, (p2_hp / 300) * 100) + "%";
-            document.getElementById('hp-text-p2').innerText = `${Math.floor(Math.max(0, p2_hp))} / 300`;
-            document.getElementById('score-board').innerHTML = `<span class="text-blue-400">${p1_wins}</span> - <span class="text-red-400">${p2_wins}</span>`;
+            document.getElementById('hp-p1').style.width = Math.max(0, (p1_hp / MAX_HP) * 100) + "%";
+            document.getElementById('hp-text-p1').innerText = `${Math.floor(Math.max(0, p1_hp))} / ${MAX_HP}`;
+            document.getElementById('hp-p2').style.width = Math.max(0, (p2_hp / MAX_HP) * 100) + "%";
+            document.getElementById('hp-text-p2').innerText = `${Math.floor(Math.max(0, p2_hp))} / ${MAX_HP}`;
+            
+            document.getElementById('score-board-p1').innerText = p1_wins;
+            document.getElementById('score-board-p2').innerText = p2_wins;
             document.getElementById('round-num').innerText = currentRound;
         }
 
         function adminEndRound() {
-            // Parar a los jugadores
             db.ref('battle_state/status').set('result');
             
             const resScreen = document.getElementById('result-screen');
             const winText = document.getElementById('winner-text');
+            const winMonster = document.getElementById('winner-monster-result');
             const btnNext = document.getElementById('btn-next');
             const btnHome = document.getElementById('btn-home');
             
             resScreen.classList.remove('hidden');
             
+            let winner;
             if (p2_hp <= 0) {
-                winText.innerText = "¡GANA EL JUGADOR 1!";
-                winText.className = "text-7xl font-black text-blue-400 mb-8 drop-shadow-[0_0_20px_currentColor]";
                 p1_wins++;
+                winner = currentP1;
+                winText.className = "text-7xl font-black text-blue-400 mb-6 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] text-center";
             } else {
-                winText.innerText = "¡GANA EL JUGADOR 2!";
-                winText.className = "text-7xl font-black text-red-500 mb-8 drop-shadow-[0_0_20px_currentColor]";
                 p2_wins++;
+                winner = currentP2;
+                winText.className = "text-7xl font-black text-red-500 mb-6 drop-shadow-[0_0_20px_rgba(239,68,68,0.8)] text-center";
             }
-            
+
+            winMonster.style.backgroundImage = `url('./monstruo_${winner.monster}.png')`;
             adminUpdateHP();
 
             if (p1_wins === 2 || p2_wins === 2) {
-                winText.innerText = p1_wins === 2 ? "🏆 ¡VICTORIA ABSOLUTA J1! 🏆" : "🏆 ¡VICTORIA ABSOLUTA J2! 🏆";
-                winText.className = "text-8xl font-black text-yellow-400 mb-8 text-center";
+                winText.innerHTML = `🏆 ¡VICTORIA FINAL! 🏆<br><span class="text-white text-5xl">El ganador absoluto es ${winner.name.toUpperCase()}</span>`;
+                winText.className = "text-8xl font-black text-yellow-400 mb-6 text-center leading-tight drop-shadow-[0_0_30px_rgba(255,255,0,0.8)]";
                 btnNext.classList.add('hidden');
                 btnHome.classList.remove('hidden');
-                // Limpiar el estado de firebase para regresar todo a la normalidad
                 db.ref('battle_state').remove();
             } else {
+                winText.innerHTML = `¡GANÓ LA RONDA!<br><span class="text-white text-5xl">${winner.name.toUpperCase()}</span>`;
                 btnNext.classList.remove('hidden');
                 btnHome.classList.add('hidden');
                 btnNext.onclick = () => {
@@ -509,11 +571,11 @@
             const text = document.createElement('div');
             text.className = 'onomatopoeia';
             text.innerText = words[Math.floor(Math.random() * words.length)];
-            text.style.setProperty('--tx', (Math.random() - 0.5) * 250 + 'px');
-            text.style.setProperty('--ty', (Math.random() - 1) * 200 + 'px');
+            text.style.setProperty('--tx', (Math.random() - 0.5) * 350 + 'px');
+            text.style.setProperty('--ty', (Math.random() - 1) * 300 + 'px');
             text.style.left = '20%'; text.style.top = '0%';
             container.appendChild(text);
-            setTimeout(() => text.remove(), 800);
+            setTimeout(() => text.remove(), 700);
         }
     </script>
 </body>
